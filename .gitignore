@@ -1,0 +1,9 @@
+.ruff_cache/
+runs/
+__pycache__/*
+*.pyc
+vis/
+*.ipynb
+model_stats.txt
+output/
+*.pth
