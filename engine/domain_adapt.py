@@ -1,14 +1,13 @@
 import os
 import numpy as np
 import torch
-import torch.nn.functional as F
 from torch.amp import GradScaler, autocast
 from torch.optim.lr_scheduler import CosineAnnealingLR
 from torch.utils.tensorboard import SummaryWriter
 from tqdm import tqdm
 from yacs.config import CfgNode as CN
 
-from data.data import make_dataset
+from data.dataset import make_dataset
 from eval import evaluate
 from model import Model
 from src.utils import clean_exp_savedir, setup
@@ -102,24 +101,24 @@ def run_da_step(cfg: CN, exp_save_dir: str, best_bi_ckpt: str):
             # gradient reversal layer alpha 
             grl_alpha = 2.0 / (1.0 + np.exp(-10 * (current_step / total_steps))) - 1.0
             # src_strong_aug, src_label
-            _, src_strong_data, src_labels = source_data
+            _, src_strong_img, src_labels = source_data
             # tgt_weak_aug, tgt_strong_aug
-            tgt_weak_data, tgt_strong_data, _ = target_data
+            tgt_weak_img, tgt_strong_img, _ = target_data
 
-            src_strong_img = src_strong_data.to(device)
+            src_strong_img = src_strong_img.to(device)
             src_labels = src_labels.to(device)
-            tgt_strong_img = tgt_strong_data.to(device)
-            tgt_weak_img = tgt_weak_data.to(device)  # weak
+            tgt_strong_img = tgt_strong_img.to(device)
+            tgt_weak_img = tgt_weak_img.to(device)  # weak
             optimizer.zero_grad()
             with autocast('cuda'):
                 # 1. Source cls loss
-                logit_s = model(src_strong_img, branch="src")
+                logit_s = model(src_strong_img, branch="src", region="fg")
                 loss_cls = supervised_loss(logit_s, src_labels)
                 del logit_s, src_labels
 
                 # 2. Self-supervised tgt loss
-                logit_t_strong = model(tgt_strong_img, branch="tgt")
-                logit_t_weak = model(tgt_weak_img, branch="tgt")
+                logit_t_strong = model(tgt_strong_img, branch="tgt", region="fg")
+                logit_t_weak = model(tgt_weak_img, branch="tgt", region="full")
 
                 with torch.no_grad():
                     pseudo_label = logit_t_weak.argmax(dim=1)
@@ -129,7 +128,7 @@ def run_da_step(cfg: CN, exp_save_dir: str, best_bi_ckpt: str):
                 del logit_t_strong, logit_t_weak
 
                 # 3. Adv loss
-                logit_s, logit_t = model(src_strong_img, tgt_strong_img, branch="adversarial", grl_alpha=grl_alpha)
+                logit_s, logit_t = model(src_strong_img, tgt_strong_img, branch="adversarial", grl_alpha=grl_alpha, region="bg")
                 loss_adv = adverarial_loss(logit_s, logit_t)
                 loss = (
                     loss_cls
@@ -197,15 +196,8 @@ def run_da_step(cfg: CN, exp_save_dir: str, best_bi_ckpt: str):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument(
-        "--config",
-        type=str,
-        required=True,
-        help="Path to the YAML config file",
-    )
-    parser.add_argument(
-        "--ckpt", type=str, required=True, help="Path to the checkpoint file"
-    )
+    parser.add_argument("--config", type=str, required=True, help="Path to the YAML config file")
+    parser.add_argument("--ckpt", type=str, required=True, help="Path to the checkpoint file")
     args, _ = parser.parse_known_args()
     cfg = CN(new_allowed=True)
     cfg.merge_from_file(args.config)

@@ -59,22 +59,22 @@ class Model(nn.Module):
             type="domain",
         )
 
-    def forward(self, x: torch.Tensor, y: torch.Tensor=None, branch: str="src", align_region: str="fg_reprog_img", grl_alpha: float=None):
+    def forward(self, x: torch.Tensor, y: torch.Tensor=None, branch: str="src", region: str="fg", grl_alpha: float=None):
         if branch=="src":
             prompt, head = self.visual_prompt_src, self.classifier_head_src
-            feat = self.backbone(prompt(x)[align_region])
+            feat = self.backbone(prompt(x)[region])
             logit = head(feat)
             return logit
         elif branch=="tgt":
             prompt, head = self.visual_prompt_tgt, self.classifier_head_tgt
-            feat = self.backbone(prompt(x)[align_region])
+            feat = self.backbone(prompt(x)[region])
             logit = head(feat)
             return logit
         elif branch=="adversarial":
             assert y is not None, "cross domain images required"
             assert grl_alpha is not None, "grl alpha required"
-            feat_s = self.backbone(self.visual_prompt_src(x)[align_region])
-            feat_t = self.backbone(self.visual_prompt_tgt(y)[align_region])
+            feat_s = self.backbone(self.visual_prompt_src(x)[region])
+            feat_t = self.backbone(self.visual_prompt_tgt(y)[region])
             logit_s = self.discriminator(grad_reverse(feat_s, grl_alpha))
             logit_t = self.discriminator(grad_reverse(feat_t, grl_alpha))
             return logit_s, logit_t

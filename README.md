@@ -1,13 +1,7 @@
-# [TMLR'25] ViRDA: Reusing Backbone for Unsupervised Domain Adaptation with Visual Reprogramming
+#  NeuroVR: Domain Adapt with Neuro-Visual Reprogramming
 
 ## 📒 Abstract
 
-Image classification is among the pillars of computer-vision pipelines. While state-of-the-art models excel within their training domains, their performance often deteriorates when transferred to a new, unlabeled setting. Unsupervised domain adaptation (UDA) addresses this challenge by repurposing a well-trained source classifier for the target domain, enabling strong downstream results without the need for additional labeled data. Existing UDA pipelines fine-tune already well-trained backbone parameters for every new source-and-target pair, resulting in the number of training parameters and storage memory growing linearly with each new pair, and also preventing the reuse of these well-trained backbone parameters.
-
-Inspired by recent implications that existing backbones have textural biases, we propose making use of domain-specific textural bias for domain adaptation via visual reprogramming, namely VirDA.
-Instead of fine-tuning the full backbone, VirDA prepends a domain-specific visual reprogramming layer to the backbone. This layer produces visual prompts that act as an added textural bias to the input image, adapting its ``style'' to a target domain. To optimize these visual reprogramming layers, we use multiple objective functions that optimize the intra- and inter-domain distribution differences when domain-adapting visual prompts are applied. This process does not require modifying the backbone parameters, allowing the same backbone to be reused across different domains. 
-
-We evaluate VirDA on Office-31 and obtain 92.8\% mean accuracy with only 1.5M trainable parameters. VirDA surpasses PDA, the state-of-the-art parameter-efficient UDA baseline, by +1.6\% accuracy while using just 46\% of its parameters. Compared with full-backbone fine-tuning, VirDA outperforms CDTrans and FixBi by +0.2\% and +1.4\%, respectively, while requiring only 1.7\% and 2.8\% of their trainable parameters. Relative to the strongest current methods (PMTrans and TVT), VirDA uses ~1.7\% of their parameters and trades off only 2.2\% and 1.1\% accuracy, respectively. 
 ![Main model](assets/model.png)
 
 ## 💡 Preparation

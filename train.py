@@ -2,16 +2,14 @@ import argparse
 
 from yacs.config import CfgNode as CN
 
-from burn_in import run_bi_step
-from domain_adapt import run_da_step
+from engine.burn_in import run_bi_step
+from engine.domain_adapt import run_da_step
 from utils import setup
 
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument(
-        "--config", type=str, required=True, help="Path to the YAML config file"
-    )
+    parser.add_argument("--config", type=str, required=True, help="Path to the YAML config file")
     args, _ = parser.parse_known_args()
     cfg = CN(new_allowed=True)
     cfg.merge_from_file(args.config)

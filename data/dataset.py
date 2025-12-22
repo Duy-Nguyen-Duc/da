@@ -1,7 +1,7 @@
 import torchvision.transforms as transforms
 from torch.utils.data import DataLoader, Dataset
 
-from data_configs import DATASET_CONFIGS
+from data.data_configs import DATASET_CONFIGS
 
 
 class StrongWeakAugDataset(Dataset):

@@ -1,47 +1,45 @@
 import os
-
 import torch
-import torch.nn as nn
-import torch.nn.functional as F
-import torch.optim as optim
-from torch.cuda.amp import GradScaler, autocast
+
+from torch.amp import GradScaler, autocast
 from torch.optim.lr_scheduler import CosineAnnealingLR
 from torch.utils.tensorboard import SummaryWriter
 from tqdm import tqdm
 from yacs.config import CfgNode as CN
 
-from data import make_dataset
+from data.dataset import make_dataset
 from eval import evaluate
-from model import VirDA_model
-from torch_utils import freeze_layers
-from utils import clean_exp_savedir
+from model import Model
+from src.utils import clean_exp_savedir
+from src.losses import supervised_loss
 
 
 def run_bi_step(cfg: CN, exp_save_dir: str):
-    source_train_loader, _, source_test_loader, target_test_loader = make_dataset(
-        source_dataset=cfg.dataset.source,
-        target_dataset=cfg.dataset.target,
-        img_size=cfg.img_size,
-        train_bs=cfg.burn_in.train_bs,
-        eval_bs=cfg.burn_in.eval_bs,
+    #################################### DATA ####################################
+    source_train_loader, _, source_test_loader, target_test_loader = (
+        make_dataset(
+            source_dataset=cfg.dataset.source,
+            target_dataset=cfg.dataset.target,
+            img_size=cfg.img_size,
+            train_bs=cfg.domain_adapt.train_bs,
+            eval_bs=cfg.domain_adapt.eval_bs,
+            num_workers=cfg.domain_adapt.num_workers,
+        )
     )
-    model = VirDA_model(
+    #################################### MODEL ####################################
+    model = Model(
         backbone=cfg.model.backbone.type,
         in_dim=cfg.model.backbone.in_dim,
         hidden_dim=cfg.model.backbone.hidden_dim,
         out_dim=cfg.dataset.num_classes,
-        num_res_blocks=cfg.model.backbone.num_res_blocks,
         imgsize=cfg.img_size,
-        patch_size=cfg.model.patch_size,
         attribute_layers=cfg.model.attribute_layers,
-        p_vr_src=cfg.model.source.vr_dropout,
-        p_vr_tgt=cfg.model.target.vr_dropout,
-        p_cls_src=cfg.model.source.cls_dropout,
-        p_cls_tgt=cfg.model.target.cls_dropout,
+        patch_size=cfg.model.patch_size,
     )
     device = torch.device(cfg.device)
     model = model.to(device)
-    scaler = GradScaler()
+    #################################### OPTIMIZER ####################################
+    scaler = GradScaler('cuda')
     optimizer = torch.optim.AdamW(
         [
             {
@@ -62,17 +60,13 @@ def run_bi_step(cfg: CN, exp_save_dir: str):
     epochs = cfg.burn_in.epochs
     total_steps = epochs * len(source_train_loader)
     scheduler = CosineAnnealingLR(optimizer, T_max=total_steps, eta_min=1e-5)
-
-    criterion_class = nn.CrossEntropyLoss()
+    #################################### MAIN LOOP ####################################
     writer = SummaryWriter(exp_save_dir)
-
-    # training script
     best_test_acc = 0
-    if cfg.model.backbone.freeze:
-        freeze_layers([model.backbone])
+    # Training loop
     for epoch in range(epochs):
-        model.train()
         running_loss = 0.0
+        model.train()
         pbar = tqdm(
             source_train_loader,
             total=len(source_train_loader),
@@ -84,15 +78,14 @@ def run_bi_step(cfg: CN, exp_save_dir: str):
             pbar.set_description_str(f"Epoch {epoch + 1}", refresh=True)
             current_step = epoch * len(source_train_loader) + batch_idx
             # weak_img, strong_img, label
-            src_data, _, src_labels = source_data
+            weak_img, _, src_labels = source_data 
 
-            src_img = src_data.to(device)
+            weak_img = weak_img.to(device)
             src_labels = src_labels.to(device)
-
             optimizer.zero_grad()
-            with autocast():
-                p_s = model(src_img, branch="src", inf_type="det", out_type="logits")
-                loss = criterion_class(p_s, src_labels)
+            with autocast('cuda'):
+                logit_s = model(weak_img, branch="src", region="full")
+                loss = supervised_loss(logit_s, src_labels)
                 running_loss += loss.item()
 
             scaler.scale(loss).backward()

@@ -384,7 +384,7 @@ def create_random_exp_tag(directory: str):
 
 
 def setup(cfg: CN):
-    current_dir = os.path.join(os.getcwd(), "runs")
+    current_dir = os.path.join(os.getcwd(), "experiments/")
     os.makedirs(current_dir, exist_ok=True)
     exp_code = create_random_exp_tag(current_dir)
     exp_save_dir = os.path.join(current_dir, exp_code)
