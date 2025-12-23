@@ -52,7 +52,7 @@ class DomainDiscriminator(nn.Module):
     def forward(self, x): 
         return self.net(x)
 
-def make_classifier_head(in_dim, out_dim, hidden_dim, dropout, type="domain"):
+def make_classifier_head(in_dim, hidden_dim, dropout, out_dim: int = None, type="domain"):
     if type == "domain":
         return DomainDiscriminator(in_dim=in_dim,hidden_dim=hidden_dim, dropout=dropout)
     elif type == "class":

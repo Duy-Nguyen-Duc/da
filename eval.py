@@ -1,8 +1,8 @@
 import torch
 import torch.nn as nn
 from yacs.config import CfgNode as CN
-from model import VirDA_model
-from data import make_dataset
+from src.model import Model
+from data.dataset import make_dataset
 import argparse
 
 
@@ -18,7 +18,7 @@ def evaluate(model, branch, test_loader, device):
             images = images.to(device)
             labels = labels.to(device)
 
-            pred = model(images, branch=branch, inf_type="det", out_type="logits")
+            pred = model.test(images, branch=branch)
             loss = criterion(pred, labels)
             total_loss += loss.item() * images.size(0)
             _, predicted = torch.max(pred, 1)
@@ -37,19 +37,14 @@ if __name__ == "__main__":
     cfg = CN(new_allowed=True)
     cfg.merge_from_file(args.config)
 
-    model = VirDA_model(
-        backbone=cfg.model.backbone.type,
+    model = Model(
+        backbone_type=cfg.model.backbone.type,
         in_dim=cfg.model.backbone.in_dim,
         hidden_dim=cfg.model.backbone.hidden_dim,
         out_dim=cfg.dataset.num_classes,
-        num_res_blocks=cfg.model.backbone.num_res_blocks,
         imgsize=cfg.img_size,
-        patch_size=cfg.model.patch_size,
         attribute_layers=cfg.model.attribute_layers,
-        p_vr_src=cfg.model.source.vr_dropout,
-        p_vr_tgt=cfg.model.target.vr_dropout,
-        p_cls_src=cfg.model.source.cls_dropout,
-        p_cls_tgt=cfg.model.target.cls_dropout,
+        patch_size=cfg.model.patch_size,
     )
     checkpoint = torch.load(args.ckpt, map_location=cfg.device)
     model.load_state_dict(checkpoint["model_state_dict"])

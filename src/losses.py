@@ -41,3 +41,56 @@ def masked_ce_loss(logits: torch.Tensor, labels: torch.Tensor, keep: torch.Tenso
         return logits.sum() * 0.0  # safe zero
     loss = F.cross_entropy(logits, labels, reduction="none")
     return (loss[keep]).mean()
+
+def right_for_right_reasons_grad_penalty(
+    logits_full: torch.Tensor,
+    labels: torch.Tensor,
+    reprog_full_img: torch.Tensor,
+    mask_bg_1c: torch.Tensor,
+) -> torch.Tensor:
+    """
+    Ross et al. style: penalize input-gradients in background. 
+    This is 2nd-order (create_graph=True), so keep weight small or run intermittently.
+    """
+    logp = F.log_softmax(logits_full, dim=1)
+    score = logp.gather(1, labels.view(-1, 1)).sum()
+    grads = torch.autograd.grad(
+        outputs=score,
+        inputs=reprog_full_img,
+        create_graph=True,
+        retain_graph=True,
+        only_inputs=True
+    )[0]  # (B,3,H,W)
+
+    g = grads.abs().mean(dim=1, keepdim=True)
+    return (mask_bg_1c * (g ** 2)).mean()
+
+def js_divergence_from_logits(p_logits: torch.Tensor, q_logits: torch.Tensor) -> torch.Tensor:
+    p = F.softmax(p_logits, dim=1)
+    q = F.softmax(q_logits, dim=1)
+    m = 0.5 * (p + q)
+    js = 0.5 * (
+        F.kl_div(torch.log(p + 1e-8), m, reduction="batchmean") +
+        F.kl_div(torch.log(q + 1e-8), m, reduction="batchmean")
+    )
+    return js
+
+def entropy_from_logits(logits: torch.Tensor) -> torch.Tensor:
+    p = F.softmax(logits, dim=1)
+    return -(p * torch.log(p + 1e-8)).sum(dim=1).mean()
+
+def mask_binarize_loss(mask_fg_1c: torch.Tensor) -> torch.Tensor:
+    # pushes mask values toward {0,1} (low entropy / hard partition)
+    return (mask_fg_1c * (1.0 - mask_fg_1c)).mean()
+
+def mask_area_prior(mask_fg_1c: torch.Tensor, rho: float = 0.30) -> torch.Tensor:
+    # prevents trivial all-foreground solution
+    return (mask_fg_1c.mean() - rho).abs()
+
+def total_variation(x: torch.Tensor) -> torch.Tensor:
+    # x: (B,C,H,W) or (C,H,W)
+    if x.dim() == 3:
+        x = x.unsqueeze(0)
+    tv_h = (x[..., 1:, :] - x[..., :-1, :]).abs().mean()
+    tv_w = (x[..., :, 1:] - x[..., :, :-1]).abs().mean()
+    return tv_h + tv_w

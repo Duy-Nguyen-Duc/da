@@ -9,7 +9,7 @@ from yacs.config import CfgNode as CN
 
 from data.dataset import make_dataset
 from eval import evaluate
-from model import Model
+from src.model import Model
 from src.utils import clean_exp_savedir
 from src.losses import supervised_loss
 
@@ -28,7 +28,7 @@ def run_bi_step(cfg: CN, exp_save_dir: str):
     )
     #################################### MODEL ####################################
     model = Model(
-        backbone=cfg.model.backbone.type,
+        backbone_type=cfg.model.backbone.type,
         in_dim=cfg.model.backbone.in_dim,
         hidden_dim=cfg.model.backbone.hidden_dim,
         out_dim=cfg.dataset.num_classes,
@@ -84,8 +84,8 @@ def run_bi_step(cfg: CN, exp_save_dir: str):
             src_labels = src_labels.to(device)
             optimizer.zero_grad()
             with autocast('cuda'):
-                logit_s = model(weak_img, branch="src", region="full")
-                loss = supervised_loss(logit_s, src_labels)
+                logit_s = model(weak_img, branch="src", region=["full"])
+                loss = supervised_loss(logit_s['full'], src_labels)
                 running_loss += loss.item()
 
             scaler.scale(loss).backward()

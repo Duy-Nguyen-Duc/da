@@ -4,7 +4,7 @@ from yacs.config import CfgNode as CN
 
 from engine.burn_in import run_bi_step
 from engine.domain_adapt import run_da_step
-from utils import setup
+from src.utils import setup
 
 
 def main():

@@ -9,12 +9,13 @@ from yacs.config import CfgNode as CN
 
 from data.dataset import make_dataset
 from eval import evaluate
-from model import Model
+from src.model import Model
 from src.utils import clean_exp_savedir, setup
 from src.losses import (
-    supervised_loss, 
-    kl_divergene_loss, 
-    adverarial_loss, 
+    supervised_loss,  
+    adversarial_loss, 
+    js_divergence_from_logits,
+    entropy_from_logits,
 )
 
 import argparse
@@ -34,7 +35,7 @@ def run_da_step(cfg: CN, exp_save_dir: str, best_bi_ckpt: str):
     )
     #################################### MODEL ####################################
     model = Model(
-        backbone=cfg.model.backbone.type,
+        backbone_type=cfg.model.backbone.type,
         in_dim=cfg.model.backbone.in_dim,
         hidden_dim=cfg.model.backbone.hidden_dim,
         out_dim=cfg.dataset.num_classes,
@@ -112,29 +113,31 @@ def run_da_step(cfg: CN, exp_save_dir: str, best_bi_ckpt: str):
             optimizer.zero_grad()
             with autocast('cuda'):
                 # 1. Source cls loss
-                logit_s = model(src_strong_img, branch="src", region="fg")
-                loss_cls = supervised_loss(logit_s, src_labels)
-                del logit_s, src_labels
+                logits_s = model.forward_sample(src_strong_img, branch="src", region=["bg","fg", "full"], return_mask=False)
+                loss_cls = supervised_loss(logits_s['fg'], src_labels) + supervised_loss(logits_s['full'], src_labels)
+                loss_src_div = js_divergence_from_logits(logits_s['fg'], logits_s['full'])
+                loss_src_bg = -entropy_from_logits(logits_s['bg'])
 
                 # 2. Self-supervised tgt loss
-                logit_t_strong = model(tgt_strong_img, branch="tgt", region="fg")
-                logit_t_weak = model(tgt_weak_img, branch="tgt", region="full")
+                logit_t_strong = model.forward_sample(tgt_strong_img, branch="tgt", region=['fg', 'full'], return_mask=False)
+                logit_t_weak = model.forward_sample(tgt_weak_img,  branch="src", region=['bg','fg', 'full'], return_mask=False)
 
                 with torch.no_grad():
                     pseudo_label = logit_t_weak.argmax(dim=1)
                 
-                loss_ssl = supervised_loss(logit_t_strong, pseudo_label)
-                loss_div = kl_divergene_loss(logit_t_strong, logit_t_weak)
-                del logit_t_strong, logit_t_weak
+                loss_ssl = supervised_loss(logit_t_strong['full'], pseudo_label)
+                loss_div = js_divergence_from_logits(logit_t_strong['fg'], logit_t_weak['fg'])
+                loss_tgt_bg = -entropy_from_logits(logit_t_weak['bg'])
 
                 # 3. Adv loss
-                logit_s, logit_t = model(src_strong_img, tgt_strong_img, branch="adversarial", grl_alpha=grl_alpha, region="bg")
-                loss_adv = adverarial_loss(logit_s, logit_t)
+                logit_s, logit_t = model.forward_adversarial(src_strong_img, tgt_strong_img, grl_alpha=grl_alpha, region=['fg'])
+                loss_adv = adversarial_loss(logit_s['fg'], logit_t['fg'])
                 loss = (
                     loss_cls
-                    + cfg.alpha_div * loss_div
+                    + cfg.alpha_div * (loss_div + loss_src_div)
                     + cfg.alpha_adv * loss_adv
                     + cfg.alpha_ssl * loss_ssl
+                    + 0.1 * (loss_tgt_bg + loss_src_bg)
                 )
 
             running_loss += loss.item()
@@ -147,6 +150,9 @@ def run_da_step(cfg: CN, exp_save_dir: str, best_bi_ckpt: str):
             writer.add_scalar("DA/Train Adv loss", loss_adv.item(), current_step)
             writer.add_scalar("DA/Train Ssl loss", loss_ssl.item(), current_step)
             writer.add_scalar("DA/Train Div loss", loss_div.item(), current_step)
+            writer.add_scalar("DA/Train Src Div loss", loss_src_div.item(), current_step)
+            writer.add_scalar("DA/Train BG tgt loss", loss_tgt_bg.item(), current_step)
+            writer.add_scalar("DA/Train BG src loss", loss_src_bg.item(), current_step)
             writer.add_scalar("DA/Train BatchLoss", loss.item(), current_step)
         scheduler.step()
         test_loss_src, test_acc_src = evaluate(

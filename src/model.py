@@ -2,7 +2,7 @@ import torch
 import torch.nn as nn
 
 from src.components.torch_nn import make_backbone, make_classifier_head
-from src.components.mask_generator import InstancewiseVisualPrompt
+from src.components.visual_prompt import InstancewiseVisualPrompt
 
 from src.utils import freeze_layers, grad_reverse
 
@@ -42,14 +42,14 @@ class Model(nn.Module):
             in_dim=in_dim,
             hidden_dim=hidden_dim,
             out_dim=out_dim,
-            dropout=0.3,
+            dropout=0.1,
             type="class",
         )
         self.classifier_head_tgt = make_classifier_head(
             in_dim=in_dim,
             hidden_dim=hidden_dim,
             out_dim=out_dim,
-            dropout=0.3,
+            dropout=0.1,
             type="class",
         )
         self.discriminator = make_classifier_head(
@@ -58,32 +58,37 @@ class Model(nn.Module):
             dropout=0.1, 
             type="domain",
         )
-
-    def forward(self, x: torch.Tensor, y: torch.Tensor=None, branch: str="src", region: str="fg", grl_alpha: float=None):
-        if branch=="src":
-            prompt, head = self.visual_prompt_src, self.classifier_head_src
-            feat = self.backbone(prompt(x)[region])
-            logit = head(feat)
-            return logit
-        elif branch=="tgt":
-            prompt, head = self.visual_prompt_tgt, self.classifier_head_tgt
-            feat = self.backbone(prompt(x)[region])
-            logit = head(feat)
-            return logit
-        elif branch=="adversarial":
-            assert y is not None, "cross domain images required"
-            assert grl_alpha is not None, "grl alpha required"
-            feat_s = self.backbone(self.visual_prompt_src(x)[region])
-            feat_t = self.backbone(self.visual_prompt_tgt(y)[region])
+    def forward_adversarial(self, x_s: torch.Tensor, x_t: torch.Tensor, region: list[str]=["fg"], grl_alpha: float=1.0):
+        out = {}
+        out['src'] = {}
+        out['tgt'] = {}
+        for re in region:
+            feat_s = self.backbone(self.visual_prompt_src(x_s)[re])
+            feat_t = self.backbone(self.visual_prompt_tgt(x_t)[re])
             logit_s = self.discriminator(grad_reverse(feat_s, grl_alpha))
             logit_t = self.discriminator(grad_reverse(feat_t, grl_alpha))
-            return logit_s, logit_t
-        else: 
-            raise ValueError(f"Unknown branch {branch}")
+            out['src'][re] = logit_s
+            out['tgt'][re] = logit_t
+        return out
+
+    def forward_sample(self, x: torch.Tensor, region: list[str]=["fg"], branch: str="src", return_mask: bool=True):
+        out = {}
+        prompt = self.visual_prompt_src if branch=="src" else self.visual_prompt_tgt
+        head = self.classifier_head_src if branch=="src" else self.classifier_head_tgt
+        reprog_imgs = prompt(x)
+        for re in region:
+            feat = self.backbone(reprog_imgs[re])
+            out[re] = head(feat)
+        
+        if return_mask:
+            out['fg_mask'] = reprog_imgs['fg_mask']
+            out['bg_mask'] = reprog_imgs['bg_mask']
+        return out
     
     def test(self, x, branch: str="src"):
-        prompt, head = (self.visual_prompt_src, self.classifier_head_src) if branch=="src" else (self.visual_prompt_tgt, self.classifier_head_tgt)
-        reprog_img = prompt(x)['reprog_img']
+        prompt = self.visual_prompt_src if branch=="src" else self.visual_prompt_tgt
+        head = self.classifier_head_src if branch=="src" else self.classifier_head_tgt
+        reprog_img = prompt(x)['full']
         feat = self.backbone(reprog_img)
         logit = head(feat)
         return logit
