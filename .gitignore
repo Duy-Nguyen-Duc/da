@@ -6,4 +6,7 @@ vis/
 *.ipynb
 model_stats.txt
 output/
-*.pth
+*.pth.ipynb_checkpoints
+data/
+experiments
+.ipynb_checkpoints

@@ -1,6 +1,5 @@
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
 
 
 class AttributeNet(nn.Module):
@@ -87,13 +86,14 @@ class AttributeNet(nn.Module):
 
 
 class InstancewiseVisualPrompt(nn.Module):
-    def __init__(self, size, layers=5, patch_size=8, channels=3, dropout_p=0.5, prompt_scale=0.5):
+    def __init__(self, size, layers=5, patch_size=8, channels=3, dropout_p=0.5, fg_bg_softmax=True):
         """
         Args:
             size: input image size (assumed square)
             layers: #layers of mask-training CNN
             patch_size: patch size for same mask value
             channels: 3 -> per-RGB mask, 1 -> shared mask across RGB
+            fg_bg_softmax: if True, enforce a clean fg/bg split using softmax over (fg,bg)
         """
         super(InstancewiseVisualPrompt, self).__init__()
         if layers not in [5, 6]:
@@ -109,13 +109,13 @@ class InstancewiseVisualPrompt(nn.Module):
         self.imagesize = size
         self.patch_size = patch_size
         self.channels = channels
+        self.fg_bg_softmax = fg_bg_softmax
 
         self.priority = AttributeNet(layers=layers, patch_size=patch_size, out_channels=channels * 2, dropout_p=dropout_p)
 
         # Separate reprogram params
         self.program_fg = nn.Parameter(1e-4 * torch.randn(3, size, size))
         self.program_bg = nn.Parameter(1e-4 * torch.randn(3, size, size))
-        self.prompt_scale = float(prompt_scale)
 
     def forward(self, x):
         B = x.shape[0]
@@ -125,26 +125,16 @@ class InstancewiseVisualPrompt(nn.Module):
         if self.channels == 1:
             masks = masks.expand(-1, -1, 3, -1, -1)
 
-        masks_rgb = F.gumbel_softmax(masks, tau=1.0, hard=False, dim=1)
-        masks_rgb = masks_rgb.reshape(B, 2, 3, self.patch_num, self.patch_num)
+        if self.fg_bg_softmax:
+            masks = torch.softmax(masks, dim=1)
 
-        masks = masks_rgb.repeat_interleave(self.patch_size, dim=-2).repeat_interleave(self.patch_size, dim=-1)
+        masks = masks.repeat_interleave(self.patch_size, dim=-2).repeat_interleave(self.patch_size, dim=-1)
 
         attention_fg = masks[:, 0]  # (B, 3, H, W)
         attention_bg = masks[:, 1]  # (B, 3, H, W)
-        
-        program_fg = self.prompt_scale * torch.tanh(self.program_fg)
-        program_bg = self.prompt_scale * torch.tanh(self.program_bg)
-
-        #Start change
-        x0 = x.mean(dim=(2, 3), keepdim=True).expand_as(x)
-        fg = x * attention_fg + x0*(1.0 - attention_fg) + attention_fg * program_fg
-        bg = x * attention_bg + x0*(1.0 - attention_bg) + attention_bg * program_bg
-        #End change
         return {
-            "bg": bg,
-            "fg": fg,
-            "full": x + attention_bg * program_bg + attention_fg * program_fg,
-            "bg_mask": attention_bg.mean(dim=1, keepdim=True), 
-            "fg_mask": attention_fg.mean(dim=1, keepdim=True)
+            "original": x,
+            "bg": x + attention_bg * self.program_bg,
+            "fg": x + attention_fg * self.program_fg,
+            "full": x + attention_bg * self.program_bg + attention_fg * self.program_fg
         } 
