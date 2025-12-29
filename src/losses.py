@@ -42,7 +42,7 @@ def masked_ce_loss(logits: torch.Tensor, labels: torch.Tensor, keep: torch.Tenso
     loss = F.cross_entropy(logits, labels, reduction="none")
     return (loss[keep]).mean()
 
-def right_for_right_reasons_grad_penalty(
+def right_reasons_grad_penalty(
     logits_full: torch.Tensor,
     labels: torch.Tensor,
     reprog_full_img: torch.Tensor,

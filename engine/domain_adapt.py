@@ -18,7 +18,8 @@ from src.losses import (
     entropy_from_logits,
     mask_binarize_loss, 
     mask_area_range_loss, 
-    total_variation    
+    total_variation, 
+    right_reasons_grad_penalty
 )
 
 import argparse
@@ -48,7 +49,7 @@ def run_da_step(cfg: CN, exp_save_dir: str, best_bi_ckpt: str):
     )
     device = torch.device(cfg.device)
     # Init with same weights
-    ckpt = torch.load(best_bi_ckpt)
+    ckpt = torch.load(best_bi_ckpt, weights_only=True)
     model.load_state_dict(ckpt["model_state_dict"])
     with torch.no_grad():
         model.visual_prompt_tgt.load_state_dict(
@@ -116,21 +117,28 @@ def run_da_step(cfg: CN, exp_save_dir: str, best_bi_ckpt: str):
             optimizer.zero_grad()
             with autocast('cuda'):
                 # 1. Source cls loss
-                logits_s = model.forward_sample(src_strong_img, branch="src", region=["bg","fg", "full"], return_mask=True)
+                logits_s = model.forward_sample(src_strong_img, branch="src", region=["bg", "fg", "full"], return_all=True)
                 loss_cls = supervised_loss(logits_s['fg'], src_labels) + supervised_loss(logits_s['full'], src_labels)
-                loss_src_div = js_divergence_from_logits(logits_s['fg'], logits_s['full'], detach_q=False)
+                #loss_src_div = js_divergence_from_logits(logits_s['fg'], logits_s['full'], detach_q=False)
+                loss_right  = right_reasons_grad_penalty(
+                    logits_full=logits_s["full"], 
+                    labels=src_labels,
+                    reprog_full_img=logits_s["full_img"],
+                    mask_bg_1c=logits_s["bg_mask"].detach(),
+                )
                 loss_src_bg = -entropy_from_logits(logits_s['bg'])
 
                 loss_mask_src = (
-                    mask_binarize_loss(logits_s["fg_mask"]) +
-                    mask_area_range_loss(logits_s["fg_mask"], rho_min=0.20, rho_max=0.85) +
-                    0.2 * total_variation(logits_s["fg_mask"])
+                    mask_binarize_loss(logits_s["fg_mask"]) 
+                    + mask_area_range_loss(logits_s["fg_mask"], rho_min=0.20, rho_max=0.5) 
+                    + 0.2 * total_variation(logits_s["fg_mask"])
+                    + logits_s['fg_mask'].mean()
                 )
                 del logits_s, src_labels
 
                 # 2. Self-supervised tgt loss
-                logit_t_strong = model.forward_sample(tgt_strong_img, branch="tgt", region=['fg', 'full'], return_mask=False)
-                logit_t_weak = model.forward_sample(tgt_weak_img,  branch="src", region=['bg','fg', 'full'], return_mask=False)
+                logit_t_strong = model.forward_sample(tgt_strong_img, branch="tgt", region=['fg', 'full'])
+                logit_t_weak = model.forward_sample(tgt_weak_img,  branch="src", region=['bg','fg', 'full'])
 
                 with torch.no_grad():
                     pseudo_label = logit_t_weak['fg'].argmax(dim=1)
@@ -145,11 +153,12 @@ def run_da_step(cfg: CN, exp_save_dir: str, best_bi_ckpt: str):
                 loss_adv = adversarial_loss(logit_s['fg'], logit_t['fg'])
                 loss = (
                     loss_cls
-                    + cfg.alpha_div * (loss_div + loss_src_div)
+                    + cfg.alpha_div * (loss_div)
                     + cfg.alpha_adv * loss_adv
                     + cfg.alpha_ssl * loss_ssl
-                    + 0.1 * (loss_tgt_bg + loss_src_bg)
-                    + 0.05* loss_mask_src
+                    + 0.3 * (loss_tgt_bg + loss_src_bg)
+                    + 1.0 * loss_mask_src
+                    + 0.1 * loss_right
                 )
 
             running_loss += loss.item()
@@ -162,31 +171,32 @@ def run_da_step(cfg: CN, exp_save_dir: str, best_bi_ckpt: str):
             writer.add_scalar("DA/Train Adv loss", loss_adv.item(), current_step)
             writer.add_scalar("DA/Train Ssl loss", loss_ssl.item(), current_step)
             writer.add_scalar("DA/Train Div loss", loss_div.item(), current_step)
-            writer.add_scalar("DA/Train Src Div loss", loss_src_div.item(), current_step)
+            #writer.add_scalar("DA/Train Src Div loss", loss_src_div.item(), current_step)
+            writer.add_scalar("DA/Train right loss", loss_right.item(), current_step)
             writer.add_scalar("DA/Train BG tgt loss", loss_tgt_bg.item(), current_step)
             writer.add_scalar("DA/Train BG src loss", loss_src_bg.item(), current_step)
             writer.add_scalar("DA/Train mask src loss", loss_mask_src.item(), current_step)
             writer.add_scalar("DA/Train BatchLoss", loss.item(), current_step)
         scheduler.step()
-        test_loss_src, test_acc_src = evaluate(
-            model, branch="src", test_loader=source_test_loader, device=device
-        )
+        # test_loss_src, test_acc_src = evaluate(
+        #     model, branch="src", test_loader=source_test_loader, device=device
+        # )
         test_loss_tgt, test_acc_tgt = evaluate(
             model, branch="tgt", test_loader=target_test_loader, device=device
         )
 
-        writer.add_scalar("Source/Test EpochLoss", test_loss_src, epoch)
-        writer.add_scalar("Source/Test Accuracy", test_acc_src, epoch)
+        # writer.add_scalar("Source/Test EpochLoss", test_loss_src, epoch)
+        # writer.add_scalar("Source/Test Accuracy", test_acc_src, epoch)
         writer.add_scalar("Target/Test EpochLoss", test_loss_tgt, epoch)
         writer.add_scalar("Target/Test Accuracy", test_acc_tgt, epoch)
         writer.add_scalar(
             "DA/Epoch loss", running_loss / len(source_train_loader), epoch
         )
 
-        print(
-            f"Epoch [{epoch + 1}/{epochs}] "
-            f"Source Loss: {test_loss_src:.4f}, Source Acc: {test_acc_src:.2f}%"
-        )
+        # print(
+        #     f"Epoch [{epoch + 1}/{epochs}] "
+        #     f"Source Loss: {test_loss_src:.4f}, Source Acc: {test_acc_src:.2f}%"
+        # )
         print(
             f"Epoch [{epoch + 1}/{epochs}] "
             f"Target Loss: {test_loss_tgt:.4f}, Target Acc: {test_acc_tgt:.2f}%"
@@ -211,19 +221,3 @@ def run_da_step(cfg: CN, exp_save_dir: str, best_bi_ckpt: str):
             print(f"New best checkpoint saved: {ckpt_path}")
     clean_exp_savedir(exp_save_dir, ckpt_path, prefix="da")
     return ckpt_path
-
-
-if __name__ == "__main__":
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--config", type=str, required=True, help="Path to the YAML config file")
-    parser.add_argument("--ckpt", type=str, required=True, help="Path to the checkpoint file")
-    args, _ = parser.parse_known_args()
-    cfg = CN(new_allowed=True)
-    cfg.merge_from_file(args.config)
-    exp_save_dir = setup(cfg)
-
-    print("Running DA step")
-    best_ckpt = args.ckpt
-    print("Loading best checkpoint from burn-in step:", best_ckpt)
-    # Run domain adaptation step
-    run_da_step(cfg, exp_save_dir=exp_save_dir, best_bi_ckpt=best_ckpt)

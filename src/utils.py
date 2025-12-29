@@ -2,12 +2,12 @@ import torch
 import torch.nn as nn
 from torch.autograd import Function
 import numpy as np
-
-
+from datetime import datetime
 from collections import defaultdict
 from dataclasses import dataclass
 from typing import Dict, Tuple, Any, List, Optional
 import os
+import shutil
 import random
 import string
 from yacs.config import CfgNode as CN
@@ -386,7 +386,7 @@ def create_random_exp_tag(directory: str):
 def setup(cfg: CN):
     current_dir = os.path.join(os.getcwd(), "experiments/")
     os.makedirs(current_dir, exist_ok=True)
-    exp_code = create_random_exp_tag(current_dir)
+    exp_code = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
     exp_save_dir = os.path.join(current_dir, exp_code)
     os.makedirs(exp_save_dir, exist_ok=True)
     with open(os.path.join(exp_save_dir, "config.txt"), "w") as f:
@@ -400,3 +400,36 @@ def clean_exp_savedir(exp_save_dir, best_ckpt, prefix="bi"):
             file = os.path.join(exp_save_dir, checkpoint)
             if file != best_ckpt:
                 os.remove(file)
+
+def log_everything(exp_savedir, file_paths=None):
+    if file_paths is None:
+        file_paths = [
+            "engine/domain_adapt.py",
+            "src/model.py",
+            "src/components/visual_prompt.py"
+        ]
+
+    # The output file where all code will be dumped
+    output_log_path = os.path.join(exp_savedir, "code_artifacts.txt")
+
+    print(f"Logging source code artifacts to: {output_log_path}")
+
+    with open(output_log_path, "w", encoding="utf-8") as outfile:
+        for fpath in file_paths:
+            # Create a clear visual separator for each file
+            outfile.write("=" * 80 + "\n")
+            outfile.write(f"START OF FILE: {fpath}\n")
+            outfile.write("=" * 80 + "\n\n")
+
+            if os.path.exists(fpath):
+                try:
+                    with open(fpath, "r", encoding="utf-8") as infile:
+                        outfile.write(infile.read())
+                except Exception as e:
+                    outfile.write(f"\n[ERROR READING FILE: {e}]\n")
+            else:
+                outfile.write(f"\n[FILE NOT FOUND: {fpath}]\n")
+
+            outfile.write("\n\n" + "-" * 80 + "\n")
+            outfile.write(f"END OF FILE: {fpath}\n")
+            outfile.write("-" * 80 + "\n\n")

@@ -11,7 +11,7 @@ from data.dataset import make_dataset
 from eval import evaluate
 from src.model import Model
 from src.utils import clean_exp_savedir
-from src.losses import supervised_loss
+from src.losses import supervised_loss, entropy_from_logits
 
 
 def run_bi_step(cfg: CN, exp_save_dir: str):
@@ -84,15 +84,18 @@ def run_bi_step(cfg: CN, exp_save_dir: str):
             src_labels = src_labels.to(device)
             optimizer.zero_grad()
             with autocast('cuda'):
-                logit_s = model.forward_sample(weak_img, branch="src", region=["full"], return_mask=False)
-                loss = supervised_loss(logit_s['full'], src_labels)
+                logit_s = model.forward_sample(weak_img, branch="src", region=["fg", "bg"])
+                loss_ce = supervised_loss(logit_s['fg'], src_labels)
+                loss_bg = -entropy_from_logits(logit_s['bg'])
+                loss = loss_ce + 0.5*loss_bg
                 running_loss += loss.item()
 
             scaler.scale(loss).backward()
             scaler.step(optimizer)
             scaler.update()
             scheduler.step()
-            writer.add_scalar("Source/Train BatchLoss", loss.item(), current_step)
+            writer.add_scalar("Source/Train BG loss", loss_bg.item(), current_step)
+            writer.add_scalar("Source/Train CE loss", loss_ce.item(), current_step)
             writer.add_scalar(
                 "Source/Running loss",
                 running_loss / len(source_train_loader),

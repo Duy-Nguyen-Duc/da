@@ -17,7 +17,7 @@ class Model(nn.Module):
         imgsize=64,
         attribute_layers=5,
         patch_size=8,
-        attribute_channels=1,
+        attribute_channels=3,
         freeze_backbone=True
     ):
         super(Model, self).__init__()
@@ -71,7 +71,7 @@ class Model(nn.Module):
         return src_out, tgt_out
 
 
-    def forward_sample(self, x: torch.Tensor, region: list[str]=["fg"], branch: str="src", return_mask: bool=True):
+    def forward_sample(self, x: torch.Tensor, region: list[str]=["fg"], branch: str="src", return_all=False):
         out = {}
         prompt = self.visual_prompt_src if branch=="src" else self.visual_prompt_tgt
         head = self.classifier_head_src if branch=="src" else self.classifier_head_tgt
@@ -80,9 +80,10 @@ class Model(nn.Module):
             feat = self.backbone(reprog_imgs[re])
             out[re] = head(feat)
         
-        if return_mask:
-            out['fg_mask'] = reprog_imgs['fg_mask']
+        if return_all: 
             out['bg_mask'] = reprog_imgs['bg_mask']
+            out['fg_mask'] = reprog_imgs['fg_mask']
+            out['full_img'] = reprog_imgs['full']
         return out
     
     def test(self, x, branch: str="src"):
