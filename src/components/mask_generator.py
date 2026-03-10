@@ -1,13 +1,15 @@
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 
+from src.components.transformer import PatchEmbed, TransformerEncoderBlock
 
-class AttributeNet(nn.Module):
+class ConvNet(nn.Module):
     def __init__(self, layers=5, patch_size=8, out_channels=3, dropout_p=0.5):
         """
         Modified from paper: https://arxiv.org/abs/2406.03150
         """
-        super(AttributeNet, self).__init__()
+        super(ConvNet, self).__init__()
         self.layers = layers
         self.patch_size = patch_size
         self.out_channels = out_channels
@@ -84,57 +86,67 @@ class AttributeNet(nn.Module):
         y = self.conv_out(y)
         return y
 
-
-class InstancewiseVisualPrompt(nn.Module):
-    def __init__(self, size, layers=5, patch_size=8, channels=3, dropout_p=0.5, fg_bg_softmax=True):
-        """
-        Args:
-            size: input image size (assumed square)
-            layers: #layers of mask-training CNN
-            patch_size: patch size for same mask value
-            channels: 3 -> per-RGB mask, 1 -> shared mask across RGB
-            fg_bg_softmax: if True, enforce a clean fg/bg split using softmax over (fg,bg)
-        """
-        super(InstancewiseVisualPrompt, self).__init__()
-        if layers not in [5, 6]:
-            raise ValueError("Input layer number is not supported")
-        if patch_size not in [1, 2, 4, 8, 16, 32]:
-            raise ValueError("Input patch size is not supported")
-        if channels not in [1, 3]:
-            raise ValueError("Input channel number is not supported")
-        if patch_size == 32 and layers != 6:
-            raise ValueError("Input layer number and patch size are conflict with each other")
-
-        self.patch_num = int(size / patch_size)
-        self.imagesize = size
+class TransformerNet(nn.Module):
+    def __init__(
+        self,
+        layers: int = 5,
+        patch_size: int = 8,
+        out_channels: int = 3,
+        dropout_p: float = 0.1,
+        embed_dim: int = 128,
+        num_heads: int = 4,
+        mlp_ratio: float = 4.0,
+    ):
+        super(TransformerNet, self).__init__()
         self.patch_size = patch_size
-        self.channels = channels
-        self.fg_bg_softmax = fg_bg_softmax
+        self.out_channels = out_channels
+        self.patch_embed = PatchEmbed(patch_size, in_channels=3, embed_dim=embed_dim)
+        self.pos_embed = None
+        self.embed_dim = embed_dim
 
-        self.priority = AttributeNet(layers=layers, patch_size=patch_size, out_channels=channels * 2, dropout_p=dropout_p)
+        self.blocks = nn.Sequential(*[
+            TransformerEncoderBlock(embed_dim, num_heads, mlp_ratio, dropout_p)
+            for _ in range(layers)
+        ])
 
-        # Separate reprogram params
-        self.program_fg = nn.Parameter(1e-4 * torch.randn(3, size, size))
-        self.program_bg = nn.Parameter(1e-4 * torch.randn(3, size, size))
+        self.norm = nn.LayerNorm(embed_dim)
 
-    def forward(self, x):
+        self.head = nn.Linear(embed_dim, out_channels)
+
+    def _get_pos_embed(self, Hp: int, Wp: int, device: torch.device) -> torch.Tensor:
+        if (self.pos_embed is None
+                or self.pos_embed.shape[1] != Hp * Wp):
+            y_pos = torch.arange(Hp, device=device).unsqueeze(1).float()
+            x_pos = torch.arange(Wp, device=device).unsqueeze(0).float()
+            dim = self.embed_dim
+            div = torch.exp(
+                torch.arange(0, dim, 2, device=device).float()
+                * -(torch.log(torch.tensor(10000.0)) / dim)
+            )
+            pe = torch.zeros(Hp, Wp, dim, device=device)
+            pe[:, :, 0::2] = torch.sin(x_pos.unsqueeze(-1) * div)
+            pe[:, :, 1::2] = torch.cos(y_pos.unsqueeze(-1) * div[: dim // 2])
+            self.pos_embed = pe.view(1, Hp * Wp, dim)   # [1, N, D]
+        return self.pos_embed
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
         B = x.shape[0]
-        masks = self.priority(x)
-        masks = masks.view(B, 2, self.channels, self.patch_num, self.patch_num)
+        tokens, Hp, Wp = self.patch_embed(x)
+        pos = self._get_pos_embed(Hp, Wp, x.device)
+        tokens = tokens + pos
+        tokens = self.blocks(tokens)
+        tokens = self.norm(tokens)
+        out = self.head(tokens)
+        out = out.transpose(1, 2)
+        out = out.view(B, self.out_channels, Hp, Wp)
+        out = F.interpolate(out, scale_factor=self.patch_size,
+                            mode="bilinear", align_corners=False)
+        return out 
 
-        if self.channels == 1:
-            masks = masks.expand(-1, -1, 3, -1, -1)
-
-        if self.fg_bg_softmax:
-            masks = torch.softmax(masks, dim=1)
-
-        masks = masks.repeat_interleave(self.patch_size, dim=-2).repeat_interleave(self.patch_size, dim=-1)
-
-        attention_fg = masks[:, 0]  # (B, 3, H, W)
-        attention_bg = masks[:, 1]  # (B, 3, H, W)
-        return {
-            "original": x,
-            "bg": x + attention_bg * self.program_bg,
-            "fg": x + attention_fg * self.program_fg,
-            "full": x + attention_bg * self.program_bg + attention_fg * self.program_fg
-        } 
+def get_attr_net(layers: int = 5, patch_size: int = 8, out_channels: int = 3, dropout_p: float = 0.5, type: str = "conv"):
+    if type == "conv":
+        return ConvNet(layers, patch_size, out_channels, dropout_p)
+    elif type == "transformer":
+        return TransformerNet(layers, patch_size, out_channels, dropout_p)
+    else:
+        raise ValueError("Unsupported attribute network type")
