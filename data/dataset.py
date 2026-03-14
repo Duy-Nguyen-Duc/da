@@ -115,7 +115,7 @@ def make_dataset(
         source_test_data,
         batch_size=eval_bs,
         shuffle=False,
-        drop_last=True,
+        drop_last=False,
         num_workers=num_workers,
         pin_memory=True,
     )
@@ -123,7 +123,7 @@ def make_dataset(
         target_test_data,
         batch_size=eval_bs,
         shuffle=False,
-        drop_last=True,
+        drop_last=False,
         num_workers=num_workers,
         pin_memory=True,
     )
