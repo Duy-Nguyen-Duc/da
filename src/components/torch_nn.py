@@ -18,7 +18,7 @@ def make_backbone(backbone_name):
     elif backbone_name == "resnet101":
         backbone = resnet101(ResNet101_Weights.IMAGENET1K_V1)
     elif backbone_name == "vit_b_16":
-        backbone = ViT("B_32_imagenet1k", pretrained=True)
+        backbone = ViT("B_16_imagenet1k", pretrained=True)
     elif backbone_name == "vit_b_32":
         backbone =  ViT("B_32_imagenet1k", pretrained=True)
     else:

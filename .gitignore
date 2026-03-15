@@ -7,3 +7,4 @@ vis/
 model_stats.txt
 output/
 *.pth
+.ipynb_checkpoint/
