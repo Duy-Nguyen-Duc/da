@@ -8,3 +8,4 @@ scikit-learn
 huggingface_hub
 gdown
 pytorch_pretrained_vit
+opencv-python
